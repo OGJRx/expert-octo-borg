@@ -5,6 +5,7 @@ import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CommandHandler, filters
 from telegram.constants import ParseMode
+from telegram.helpers import escape_markdown
 from telegram import ReplyKeyboardRemove
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
@@ -14,15 +15,6 @@ import re
 import os
 
 logger = logging.getLogger(__name__)
-
-def escape_markdown_v2(text: str) -> str:
-    """Helper function to escape special characters for MarkdownV2."""
-    # Escape backslash first to prevent issues with other escapes
-    text = text.replace('\\', '\\\\')
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    for char in special_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
 
 # Conversation states
 ASK_FOR_INPUT, HANDLE_FILE, HANDLE_INCOME, ASK_DEEPER_INSIGHT = range(4)
@@ -86,21 +78,22 @@ class GeminiBorg:
 
     async def presupuesto_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Starts the /Presupuesto conversation with a professional and conversational message."""
-        message = """👋 ¡Hola! Soy *BORG*, tu **asistente financiero personal** 🤖\\. Impulsado por Google Gemini, te ayudaré a tomar el control de tus finanzas con un plan de presupuesto personalizado\\. 🚀
+        raw_message = """👋 ¡Hola! Soy *BORG*, tu **asistente financiero personal** 🤖. Impulsado por Google Gemini, te ayudaré a tomar el control de tus finanzas con un plan de presupuesto personalizado. 🚀
 
-Para crear tu plan, necesito información\\. Elige una opción:
+Para crear tu plan, necesito información. Elige una opción:
 
-1️⃣ 📄 *Sube un archivo \\(PDF o TXT\\)*:
-Envía estados de cuenta o documentos financieros\\. Analizaré tu situación para un presupuesto contextualizado\\. ¡Tu privacidad es clave! 🔒
+1️⃣ 📄 *Sube un archivo (PDF o TXT)*:
+Envía estados de cuenta o documentos financieros. Analizaré tu situación para un presupuesto contextualizado. ¡Tu privacidad es clave! 🔒
 
 2️⃣ 💰 *Ingresa tu ingreso mensual*:
-Indica cuánto ganas al mes \\(ej\\. `Gano 20000 MXN`\\)\\. Con esto, crearé tu plan financiero\\. ¡Rápido y sencillo! 📈
+Indica cuánto ganas al mes (ej. `Gano 20000 MXN`). Con esto, crearé tu plan financiero. ¡Rápido y sencillo! 📈
 
-3️⃣ ⏩ *Usa `/skip`*:
-Si prefieres un plan genérico, usaré un ingreso predefinido\\. ¡Ideal para una visión general! 💡
+3️⃣ ⏩ *Usa /skip*:
+Si prefieres un plan genérico, usaré un ingreso predefinido. ¡Ideal para una visión general! 💡
 
-Mi meta es que domines tus finanzas como un experto\\. ¡Empecemos a construir tu futuro financiero! ✨"""
-        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN_V2)
+Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu futuro financiero! ✨"""
+        escaped_message = escape_markdown(raw_message, version=2)
+        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
         return ASK_FOR_INPUT
 
     async def skip_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -200,16 +193,16 @@ Mi meta es que domines tus finanzas como un experto\\. ¡Empecemos a construir t
                     context.user_data['financial_json'] = structured_summary
 
                     resumen = structured_summary['resumen']
-                    initial_message = (
-                        f"*¡Análisis completado\\!* 📊\n\n"
+                    raw_message = (
+                        f"*¡Análisis completado!* 📊\n\n"
                         f"Saldo Inicial: `{resumen['saldo_inicial']:.2f}`\n"
                         f"Saldo Final: `{resumen['saldo_final']:.2f}`\n"
                         f"Total Ingresos: `{resumen['total_ingresos']:.2f}`\n"
                         f"Total Egresos: `{resumen['total_egresos']:.2f}`\n\n"
-                        f"Elige una opción abajo para insights personalizados\\."
+                        f"Elige una opción abajo para insights personalizados."
                     )
-
-                    await update.message.reply_text(initial_message, parse_mode=ParseMode.MARKDOWN_V2)
+                    escaped_message = escape_markdown(raw_message, version=2)
+                    await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
 
                     await self._send_contextual_inline_menu(update, context, structured_summary)
                     return ASK_DEEPER_INSIGHT

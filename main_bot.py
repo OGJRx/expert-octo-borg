@@ -6,6 +6,7 @@ import google.generativeai as genai
 from telegram import Update, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
+from telegram.helpers import escape_markdown
 from config import Config
 from geminiborg import GeminiBorg, ASK_FOR_INPUT, HANDLE_FILE, HANDLE_INCOME, ASK_DEEPER_INSIGHT, escape_markdown_v2 # Import the GeminiBorg class, conversation states, and markdown escape utility
 
@@ -52,8 +53,8 @@ class BorgotronBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /start - Confirmación del sistema y lista de comandos"""
-        # Usamos código en línea (`) para los comandos y el estado.
-        full_message = """🟢 *SISTEMA BORG ACTIVO* 🚀
+        # El mensaje original contiene caracteres que deben ser escapados.
+        raw_message = """🟢 *SISTEMA BORG ACTIVO* 🚀
 `Conectado a Google AI`
 *Estado:* Operativo
 
@@ -63,23 +64,25 @@ class BorgotronBot:
 • `/presupuesto` - _Inicia un plan financiero._
 • `/cancel` - _Finaliza cualquier conversación._
 """
-        # No es necesario escapar el mensaje, ya que está formateado correctamente.
-        await update.message.reply_text(full_message, parse_mode=ParseMode.MARKDOWN_V2)
+        # Usamos la función de ayuda para escapar el mensaje para MarkdownV2.
+        escaped_message = escape_markdown(raw_message, version=2)
+        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"User {update.effective_user.id} started the bot.")
     
     async def ayuda_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /ayuda - Asistente IA dinámico"""
-        message = (
-            "🤖 *¡Hola! Soy BORG, tu asistente financiero personal\\!* 🤖\n\n"
-            "Estoy aquí para ayudarte a gestionar tus finanzas con la potencia de la IA de Google Gemini\\. Aquí tienes una guía de mis comandos:\n\n"
+        raw_message = (
+            "🤖 *¡Hola! Soy BORG, tu asistente financiero personal!* 🤖\n\n"
+            "Estoy aquí para ayudarte a gestionar tus finanzas con la potencia de la IA de Google Gemini. Aquí tienes una guía de mis comandos:\n\n"
             "📚 *Comandos Disponibles*:\n"
-            "• `/start` \\- _Inicia una nueva sesión o verifica el estado actual del bot y obtén una guía rápida de comandos\\._\n"
-            "• `/ayuda` \\- _Muestra este mensaje de ayuda detallado con todos los comandos y su uso\\._\n"
-            "• `/presupuesto` \\- _Activa el modo de creación de presupuesto\\. Te guiaré paso a paso para generar un plan financiero personalizado\\._\n"
-            "• `/cancel` \\- _Cancela cualquier operación o conversación en curso\\. Útil si necesitas empezar de nuevo o has terminado una tarea\\._\n\n"
-            "✨ *Consejo*: Siempre puedes usar `/cancel` si te sientes perdido o quieres reiniciar\\."
+            "• `/start` - _Inicia una nueva sesión o verifica el estado actual del bot y obtén una guía rápida de comandos._\n"
+            "• `/ayuda` - _Muestra este mensaje de ayuda detallado con todos los comandos y su uso._\n"
+            "• `/presupuesto` - _Activa el modo de creación de presupuesto. Te guiaré paso a paso para generar un plan financiero personalizado._\n"
+            "• `/cancel` - _Cancela cualquier operación o conversación en curso. Útil si necesitas empezar de nuevo o has terminado una tarea._\n\n"
+            "✨ *Consejo*: Siempre puedes usar `/cancel` si te sientes perdido o quieres reiniciar."
         )
-        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN_V2)
+        escaped_message = escape_markdown(raw_message, version=2)
+        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"User {update.effective_user.id} requested help.")
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -128,8 +131,8 @@ class BorgotronBot:
             keyboard.append([InlineKeyboardButton("<< Volver", callback_data='review_transactions')])
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-            # Escapamos solo la descripción que viene del usuario/documento
-            escaped_description = escape_markdown_v2(transaction['descripcion'])
+            # Usamos escape_markdown para la descripción que viene del usuario.
+            escaped_description = escape_markdown(transaction['descripcion'], version=2)
             await query.edit_message_text(
                 text=f"Elige la categoría para:\n*{escaped_description}*",
                 reply_markup=reply_markup,
@@ -149,9 +152,10 @@ class BorgotronBot:
 
             # Vuelve a mostrar la lista de transacciones con la categoría actualizada
             transactions = financial_json.get('transacciones', [])
-            # Escapamos solo la categoría nueva que es variable
-            escaped_category = escape_markdown_v2(new_category)
-            message_text = f"Categoría actualizada a *{escaped_category}*\\.\n\nToca otra transacción para corregir o vuelve al menú\\."
+            # Usamos escape_markdown para la nueva categoría.
+            escaped_category = escape_markdown(new_category, version=2)
+            raw_message = f"Categoría actualizada a *{escaped_category}*.\n\nToca otra transacción para corregir o vuelve al menú."
+            message_text = escape_markdown(raw_message, version=2)
             buttons = []
             for i, tx in enumerate(transactions):
                 buttons.append([
