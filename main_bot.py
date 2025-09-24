@@ -185,8 +185,8 @@ class BorgotronBot:
             response = await self.gemini_borg._generate_content_stream(prompt)
             await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2)
 
-    def run(self):
-        """Iniciar el bot"""
+    async def run(self):
+        """Iniciar el bot de forma asíncrona y segura."""
         application = Application.builder().token(self.config.TELEGRAM_TOKEN).build()
         
         # Registrar comandos
@@ -216,8 +216,9 @@ class BorgotronBot:
         
         # Iniciar polling
         logger.info("Bot started polling...")
-        application.run_polling()
+        await application.run_polling()
 
 if __name__ == '__main__':
+    import asyncio
     bot = BorgotronBot()
-    bot.run()
+    asyncio.run(bot.run())
