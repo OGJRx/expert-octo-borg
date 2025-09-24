@@ -58,44 +58,49 @@ class GeminiBorg:
 
         full_response = []
         try:
-            # Esta es la forma correcta de llamar a la API en un entorno asíncrono.
-            # No se necesita loop.run_in_executor.
             response = await self.model.generate_content_async(
-                contents=[prompt],  # La forma de pasar el prompt es más directa
+                contents=[prompt],
                 stream=True,
                 generation_config=generation_config,
                 safety_settings=safety_settings
             )
             
-            # El 'async for' ahora funcionará porque la respuesta es un generador asíncrono.
             async for chunk in response:
-                if chunk.text: # Asegurarse de que el chunk no esté vacío
+                if chunk.text:
                     full_response.append(chunk.text)
             
+            # Si la respuesta está vacía después del stream, es un caso de StopAsyncIteration implícito
+            if not full_response:
+                logger.error("Error generating content with Gemini: StopAsyncIteration, empty response.")
+                return '{"error": "La API de Gemini no devolvió contenido."}'
+
             return "".join(full_response)
+
+        except StopAsyncIteration:
+            logger.error("Error generating content with Gemini: StopAsyncIteration occurred.", exc_info=True)
+            return '{"error": "La API de Gemini cerró la conexión inesperadamente."}'
         
         except Exception:
             logger.error("Error generating content with Gemini:", exc_info=True)
-            return "Lo siento, hubo un error al generar la respuesta con Gemini."
+            return '{"error": "Lo siento, hubo un error al generar la respuesta con Gemini."}'
 
     async def presupuesto_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Starts the /Presupuesto conversation with a professional and conversational message."""
-        message = """👋 ¡Hola! Soy *BORG*, tu **asistente financiero personal** 🤖. Impulsado por Google Gemini, te ayudaré a tomar el control de tus finanzas con un plan de presupuesto personalizado. 🚀
+        message = """👋 ¡Hola! Soy *BORG*, tu **asistente financiero personal** 🤖\\. Impulsado por Google Gemini, te ayudaré a tomar el control de tus finanzas con un plan de presupuesto personalizado\\. 🚀
 
-Para crear tu plan, necesito información. Elige una opción:
+Para crear tu plan, necesito información\\. Elige una opción:
 
-1️⃣ 📄 *Sube un archivo (PDF o TXT)*:
-Envía estados de cuenta o documentos financieros. Analizaré tu situación para un presupuesto contextualizado. ¡Tu privacidad es clave! 🔒
+1️⃣ 📄 *Sube un archivo \\(PDF o TXT\\)*:
+Envía estados de cuenta o documentos financieros\\. Analizaré tu situación para un presupuesto contextualizado\\. ¡Tu privacidad es clave! 🔒
 
 2️⃣ 💰 *Ingresa tu ingreso mensual*:
-Indica cuánto ganas al mes (ej. `Gano 20000 MXN`). Con esto, crearé tu plan financiero. ¡Rápido y sencillo! 📈
+Indica cuánto ganas al mes \\(ej\\. `Gano 20000 MXN`\\)\\. Con esto, crearé tu plan financiero\\. ¡Rápido y sencillo! 📈
 
-3️⃣ ⏩ *Usa /skip*:
-Si prefieres un plan genérico, usaré un ingreso predefinido. ¡Ideal para una visión general! 💡
+3️⃣ ⏩ *Usa `/skip`*:
+Si prefieres un plan genérico, usaré un ingreso predefinido\\. ¡Ideal para una visión general! 💡
 
-Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu futuro financiero! ✨"""
-        escaped_message = escape_markdown_v2(message)
-        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
+Mi meta es que domines tus finanzas como un experto\\. ¡Empecemos a construir tu futuro financiero! ✨"""
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN_V2)
         return ASK_FOR_INPUT
 
     async def skip_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -185,22 +190,27 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
                     await update.message.reply_text("Procesando tu archivo con Gemini... 🧠")
                     
                     structured_summary = await self._summarize_with_gemini(sanitized_content)
-                    context.user_data['financial_json'] = structured_summary  # Almacenamos el JSON para reutilización
 
-                    # Eliminamos el initial_response_message estático; ahora enviamos un resumen breve basado en JSON
+                    # Verificamos si hubo un error al resumir con Gemini
+                    if 'error' in structured_summary and structured_summary['error']:
+                        error_message = f"Lo siento, no pude procesar el documento. Razón: {structured_summary['error']}"
+                        await update.message.reply_text(error_message)
+                        return ConversationHandler.END
+
+                    context.user_data['financial_json'] = structured_summary
+
                     resumen = structured_summary['resumen']
                     initial_message = (
-                        f"¡Análisis completado! 📊\n"
-                        f"Saldo Inicial: {resumen['saldo_inicial']:.2f}\n"
-                        f"Saldo Final: {resumen['saldo_final']:.2f}\n"
-                        f"Total Ingresos: {resumen['total_ingresos']:.2f}\n"
-                        f"Total Egresos: {resumen['total_egresos']:.2f}\n\n"
-                        f"Elige una opción abajo para insights personalizados."
+                        f"*¡Análisis completado\\!* 📊\n\n"
+                        f"Saldo Inicial: `{resumen['saldo_inicial']:.2f}`\n"
+                        f"Saldo Final: `{resumen['saldo_final']:.2f}`\n"
+                        f"Total Ingresos: `{resumen['total_ingresos']:.2f}`\n"
+                        f"Total Egresos: `{resumen['total_egresos']:.2f}`\n\n"
+                        f"Elige una opción abajo para insights personalizados\\."
                     )
-                    escaped_message = escape_markdown_v2(initial_message)
-                    await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
 
-                    # Enviamos el menú inline contextual
+                    await update.message.reply_text(initial_message, parse_mode=ParseMode.MARKDOWN_V2)
+
                     await self._send_contextual_inline_menu(update, context, structured_summary)
                     return ASK_DEEPER_INSIGHT
                 else:
@@ -338,14 +348,28 @@ Instrucciones:
         raw_response = await self._generate_content_stream(prompt)
         
         try:
-            # Limpiamos el raw_response para quitar ```json y ```
+            # Primero, intentamos parsear para ver si es un JSON de error
+            data = json.loads(raw_response)
+            if isinstance(data, dict) and 'error' in data:
+                logger.error(f"Received error from Gemini: {data['error']}")
+                return {
+                    "error": data['error'],
+                    "resumen": {"saldo_inicial": 0.0, "saldo_final": 0.0, "total_ingresos": 0.0, "total_egresos": 0.0},
+                    "transacciones": [],
+                    "insights_detectados": {"pagos_recurrentes": [], "fuentes_ingreso": [], "comisiones_bancarias": 0.0}
+                }
+
+            # Si no es un error, asumimos que es el JSON de datos
             cleaned_response = re.sub(r'```json\n|```', '', raw_response.strip())
             summary_data = json.loads(cleaned_response)
             logger.info("JSON parseado exitosamente del PDF.")
             return summary_data
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parseando JSON de Gemini: {e}. Raw: {raw_response}")
+
+        except json.JSONDecodeError:
+            # Si el parseo inicial falla, es probable que no sea JSON válido
+            logger.error(f"Error parseando JSON de Gemini. Raw: {raw_response}")
             return {
+                "error": "Respuesta no válida de la API de Gemini.",
                 "resumen": {"saldo_inicial": 0.0, "saldo_final": 0.0, "total_ingresos": 0.0, "total_egresos": 0.0},
                 "transacciones": [],
                 "insights_detectados": {"pagos_recurrentes": [], "fuentes_ingreso": [], "comisiones_bancarias": 0.0}

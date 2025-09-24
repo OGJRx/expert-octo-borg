@@ -16,14 +16,39 @@ logger = logging.getLogger(__name__)
 class BorgotronBot:
     def __init__(self):
         self.config = Config()
-        self.gemini_borg = GeminiBorg() # Instantiate GeminiBorg
+        self.gemini_borg = GeminiBorg()
         self.setup_ai()
-    
+
+        # Crear la aplicación una vez y reutilizarla
+        self.application = Application.builder().token(self.config.TELEGRAM_TOKEN).build()
+        self._register_handlers()
+
     def setup_ai(self):
         """Configurar conexión con Google AI"""
-        # genai.configure is already called within GeminiBorg's setup_ai_client
-        # self.gemini_borg.setup_ai_client() # This is already called in GeminiBorg's __init__
         logger.info("Google AI configured via GeminiBorg.")
+
+    def _register_handlers(self):
+        """Registra todos los manejadores de comandos y conversaciones."""
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("ayuda", self.ayuda_command))
+        self.application.add_handler(CommandHandler("cancel", self.cancel))
+        self.application.add_handler(CallbackQueryHandler(self.handle_inline_callback))
+
+        presupuesto_handler = ConversationHandler(
+            entry_points=[CommandHandler("presupuesto", self.gemini_borg.presupuesto_start)],
+            states={
+                ASK_FOR_INPUT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.gemini_borg.handle_message_input),
+                    MessageHandler(filters.Document.ALL, self.gemini_borg.handle_message_input),
+                    CommandHandler("skip", self.gemini_borg.skip_input),
+                ],
+                ASK_DEEPER_INSIGHT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.gemini_borg.handle_deeper_insight),
+                ],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel)],
+        )
+        self.application.add_handler(presupuesto_handler)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /start - Confirmación del sistema y lista de comandos"""
@@ -38,25 +63,23 @@ class BorgotronBot:
 • `/presupuesto` - _Inicia un plan financiero._
 • `/cancel` - _Finaliza cualquier conversación._
 """
-        # La función escape_markdown_v2 se encarga del resto.
-        escaped_message = escape_markdown_v2(full_message)
-        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
+        # No es necesario escapar el mensaje, ya que está formateado correctamente.
+        await update.message.reply_text(full_message, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"User {update.effective_user.id} started the bot.")
     
     async def ayuda_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /ayuda - Asistente IA dinámico"""
         message = (
-            "🤖 *¡Hola! Soy BORG, tu asistente financiero personal!* 🤖\n\n"
-            "Estoy aquí para ayudarte a gestionar tus finanzas con la potencia de la IA de Google Gemini. Aquí tienes una guía de mis comandos:\n\n"
+            "🤖 *¡Hola! Soy BORG, tu asistente financiero personal\\!* 🤖\n\n"
+            "Estoy aquí para ayudarte a gestionar tus finanzas con la potencia de la IA de Google Gemini\\. Aquí tienes una guía de mis comandos:\n\n"
             "📚 *Comandos Disponibles*:\n"
-            "• /start - _Inicia una nueva sesión o verifica el estado actual del bot y obtén una guía rápida de comandos._\n"
-            "• /ayuda - _Muestra este mensaje de ayuda detallado con todos los comandos y su uso._\n"
-            "• /presupuesto - _Activa el modo de creación de presupuesto. Te guiaré paso a paso para generar un plan financiero personalizado._\n"
-            "• /cancel - _Cancela cualquier operación o conversación en curso. Útil si necesitas empezar de nuevo o has terminado una tarea._\n\n"
-            "✨ *Consejo*: Siempre puedes usar /cancel si te sientes perdido o quieres reiniciar."
+            "• `/start` \\- _Inicia una nueva sesión o verifica el estado actual del bot y obtén una guía rápida de comandos\\._\n"
+            "• `/ayuda` \\- _Muestra este mensaje de ayuda detallado con todos los comandos y su uso\\._\n"
+            "• `/presupuesto` \\- _Activa el modo de creación de presupuesto\\. Te guiaré paso a paso para generar un plan financiero personalizado\\._\n"
+            "• `/cancel` \\- _Cancela cualquier operación o conversación en curso\\. Útil si necesitas empezar de nuevo o has terminado una tarea\\._\n\n"
+            "✨ *Consejo*: Siempre puedes usar `/cancel` si te sientes perdido o quieres reiniciar\\."
         )
-        escaped_message = escape_markdown_v2(message)
-        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"User {update.effective_user.id} requested help.")
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -105,8 +128,10 @@ class BorgotronBot:
             keyboard.append([InlineKeyboardButton("<< Volver", callback_data='review_transactions')])
 
             reply_markup = InlineKeyboardMarkup(keyboard)
+            # Escapamos solo la descripción que viene del usuario/documento
+            escaped_description = escape_markdown_v2(transaction['descripcion'])
             await query.edit_message_text(
-                text=f"Elige la categoría para:\n*{escape_markdown_v2(transaction['descripcion'])}*",
+                text=f"Elige la categoría para:\n*{escaped_description}*",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
@@ -124,7 +149,9 @@ class BorgotronBot:
 
             # Vuelve a mostrar la lista de transacciones con la categoría actualizada
             transactions = financial_json.get('transacciones', [])
-            message_text = f"Categoría actualizada a *{escape_markdown_v2(new_category)}*.\n\nToca otra transacción para corregir o vuelve al menú."
+            # Escapamos solo la categoría nueva que es variable
+            escaped_category = escape_markdown_v2(new_category)
+            message_text = f"Categoría actualizada a *{escaped_category}*\\.\n\nToca otra transacción para corregir o vuelve al menú\\."
             buttons = []
             for i, tx in enumerate(transactions):
                 buttons.append([
@@ -148,29 +175,29 @@ class BorgotronBot:
         elif data == 'debt_advisor':
             debt_amount = sum(tx['monto'] for tx in financial_json.get('transacciones', []) if tx['categoria_sugerida'] == 'Préstamo' and tx['tipo'] == 'egreso')
             prompt = f"""<role>You are a financial advisor specializing in debt management.</role>
-<context>Design a debt repayment plan for someone with {debt_amount}.</context>
-<steps> 1. Suggest repayment strategies: snowball or avalanche method.
-2. Calculate monthly payments.
-3. Recommend steps to avoid accruing new debt.</steps>"""
+<context>Design a debt repayment plan for someone with {debt_amount}. Format the entire response using Telegram's MarkdownV2, including bold, italics, and code blocks for clarity.</context>
+<steps> 1. Suggest repayment strategies (snowball, avalanche), explaining each one.
+2. Calculate potential monthly payments.
+3. Recommend steps to avoid new debt, using bold and italics for emphasis.</steps>"""
             response = await self.gemini_borg._generate_content_stream(prompt)
             await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2)
 
         elif data == 'investment_portfolio':
             risk_level = 'medium' if financial_json['resumen'].get('saldo_final', 0) > 10000 else 'low'
             prompt = f"""<role>You are an investment advisor.</role>
-<context>Design an investment portfolio for a risk tolerance level of {risk_level}.</context>
-<steps> 1. Allocate percentages to stocks, bonds, and cash.
-2. Suggest 3 specific investment options for each category.
-3. Provide diversification tips.</steps>"""
+<context>Design an investment portfolio for a risk tolerance level of {risk_level}. Format the entire response using Telegram's MarkdownV2.</context>
+<steps> 1. Allocate percentages to stocks, bonds, and cash using bold headers.
+2. Suggest 3 specific investment options (as bullet points) for each category.
+3. Provide diversification tips in italics.</steps>"""
             response = await self.gemini_borg._generate_content_stream(prompt)
             await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2)
 
         elif data == 'emergency_fund':
             monthly_expenses = financial_json['resumen'].get('total_egresos', 0) / 12
             prompt = f"""<role>You are a personal finance advisor.</role>
-<context>Help calculate the ideal emergency fund amount for someone with {monthly_expenses}.</context>
-<steps> 1. Multiply monthly expenses by 3, 6, and 12 months.
-2. Suggest strategies to build the fund.
+<context>Help calculate the ideal emergency fund amount for someone with {monthly_expenses}. Format the entire response using Telegram's MarkdownV2.</context>
+<steps> 1. Show calculations for 3, 6, and 12 months of expenses in a code block.
+2. Suggest strategies to build the fund using bullet points.
 3. Recommend safe accounts to store the fund.</steps>"""
             response = await self.gemini_borg._generate_content_stream(prompt)
             await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2)
@@ -178,54 +205,21 @@ class BorgotronBot:
         elif data == 'passive_income':
             interest_area = 'digital subscriptions' if any('Netflix' in p for p in financial_json['insights_detectados'].get('pagos_recurrentes', [])) else 'general'
             prompt = f"""<role>You are a wealth strategist.</role>
-<context>Generate 5 passive income ideas for someone interested in {interest_area}.</context>
-<steps> 1. List income streams relevant to the interest area.
-2. Estimate startup costs or time investment.
-3. Highlight long-term earning potential for each idea.</steps>"""
+<context>Generate 5 passive income ideas for someone interested in {interest_area}. Format the entire response using Telegram's MarkdownV2.</context>
+<steps> 1. List income streams with bolded titles.
+2. Estimate startup costs or time investment in a code block.
+3. Highlight long-term earning potential for each idea in italics.</steps>"""
             response = await self.gemini_borg._generate_content_stream(prompt)
             await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2)
 
-    async def run(self):
-        """Iniciar el bot de forma asíncrona y segura."""
-        application = Application.builder().token(self.config.TELEGRAM_TOKEN).build()
-        
-        # Registrar comandos
-        application.add_handler(CommandHandler("start", self.start_command))
-        application.add_handler(CommandHandler("ayuda", self.ayuda_command))
-        application.add_handler(CommandHandler("cancel", self.cancel))
-        application.add_handler(CallbackQueryHandler(self.handle_inline_callback))
-
-        # Conversation Handler for /presupuesto
-        presupuesto_handler = ConversationHandler(
-            entry_points=[CommandHandler("presupuesto", self.gemini_borg.presupuesto_start)],
-            states={
-                ASK_FOR_INPUT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.gemini_borg.handle_message_input),
-                    MessageHandler(filters.Document.ALL, self.gemini_borg.handle_message_input),
-                    CommandHandler("skip", self.gemini_borg.skip_input),
-                ],
-                ASK_DEEPER_INSIGHT: [
-                    # La conversación ahora se maneja principalmente a través de callbacks,
-                    # pero mantenemos un handler de texto por si el usuario escribe en lugar de usar botones.
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.gemini_borg.handle_deeper_insight),
-                ],
-            },
-            fallbacks=[CommandHandler("cancel", self.cancel)],
-        )
-        application.add_handler(presupuesto_handler)
-        
-        # Iniciar el bot y mantenerlo corriendo
+    def run(self):
+        """Inicia el bot y lo mantiene corriendo."""
         logger.info("Starting bot...")
-        async with application:
-            await application.start()
-            await application.updater.start_polling()
-            logger.info("Bot started polling...")
-            try:
-                await asyncio.Future()  # Mantener el bot corriendo
-            except asyncio.CancelledError:
-                logger.info("Shutdown signal received, stopping bot...")
+        # run_polling es bloqueante y maneja el ciclo de vida del bot,
+        # incluyendo el apagado con Ctrl+C.
+        self.application.run_polling()
+        logger.info("Bot has stopped.")
 
 if __name__ == '__main__':
-    import asyncio
     bot = BorgotronBot()
-    asyncio.run(bot.run())
+    bot.run()
