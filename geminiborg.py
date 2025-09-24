@@ -346,13 +346,12 @@ Basándote **únicamente en la lista de transacciones que extrajiste en la Etapa
 
     def _clean_ocr_text(self, text: str) -> str:
         """Cleans raw OCR output by normalizing whitespace and removing non-standard characters."""
-        # 1. Normaliza todos los tipos de espacios (espacios, tabs, newlines) a un solo espacio.
-        text = re.sub(r'\s+', ' ', text)
+        # 1. Colapsa múltiples espacios horizontales y tabs en un solo espacio, pero DEJA LOS SALTOS DE LÍNEA.
+        text = re.sub(r'[ \t]+', ' ', text)
         
-        # 2. Elimina cualquier carácter que no sea alfanumérico, puntuación común o símbolo de moneda.
-        # Esto es un filtro agresivo para eliminar basura invisible que puede romper la API.
-        # Mantenemos letras (incluyendo acentos), números, y puntuación esencial.
-        text = re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s.,$:€-]', '', text)
+        # 2. Elimina cualquier carácter que no sea útil. AÑADIMOS \n A LA LISTA DE PERMITIDOS para ser explícitos.
+        # Aunque \s incluye \n, ser explícito aquí previene regresiones y aclara la intención.
+        text = re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s\n.,$:€-]', '', text)
         
         return text.strip()
 
