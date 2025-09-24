@@ -74,8 +74,8 @@ class GeminiBorg:
             
             return "".join(full_response)
         
-        except Exception as e:
-            logger.error(f"Error generating content with Gemini: {e}")
+        except Exception:
+            logger.error("Error generating content with Gemini:", exc_info=True)
             return "Lo siento, hubo un error al generar la respuesta con Gemini."
 
     async def presupuesto_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

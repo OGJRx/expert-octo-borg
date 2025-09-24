@@ -220,7 +220,10 @@ class BorgotronBot:
             await application.start()
             await application.updater.start_polling()
             logger.info("Bot started polling...")
-            await asyncio.Future()  # Mantener el bot corriendo
+            try:
+                await asyncio.Future()  # Mantener el bot corriendo
+            except asyncio.CancelledError:
+                logger.info("Shutdown signal received, stopping bot...")
 
 if __name__ == '__main__':
     import asyncio
