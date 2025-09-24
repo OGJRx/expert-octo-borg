@@ -6,6 +6,8 @@ from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, Comm
 from telegram.constants import ParseMode
 from telegram import ReplyKeyboardRemove
 from PyPDF2 import PdfReader
+from pdf2image import convert_from_path
+import pytesseract
 from config import Config
 import re
 import os
@@ -141,9 +143,19 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
             file_content = ""
             try:
                 if file_info.file_name.lower().endswith('.pdf'):
-                    reader = PdfReader(file_path)
-                    for page in reader.pages:
-                        file_content += page.extract_text() or ""
+                    try:
+                        # Attempt OCR-based extraction first
+                        logger.info("Attempting OCR extraction for PDF...")
+                        images = convert_from_path(file_path)
+                        for image in images:
+                            file_content += pytesseract.image_to_string(image, lang='spa') + "\n"
+                        logger.info("OCR extraction successful.")
+                    except Exception as ocr_error:
+                        logger.warning(f"OCR extraction failed: {ocr_error}. Falling back to PyPDF2.")
+                        # Fallback to PyPDF2 if OCR fails
+                        reader = PdfReader(file_path)
+                        for page in reader.pages:
+                            file_content += page.extract_text() or ""
                 elif file_info.file_name.lower().endswith('.txt'):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         file_content = f.read()
@@ -152,11 +164,30 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
                     return ASK_FOR_INPUT
 
                 if file_content:
+                    # PASO 1: Limpiar el output crudo del OCR
+                    cleaned_content = self._clean_ocr_text(file_content)
+                    
+                    # PASO 2: Sanitizar PII del texto ya limpio
+                    sanitized_content, replacements = self._sanitize_text(cleaned_content)
+
+                    # Log the sanitization results
+                    total_replacements = sum(replacements.values())
+                    if total_replacements > 0:
+                        log_message = (
+                            f"Sanitized PII from document. "
+                            f"Replacements: {replacements['nombres']} names, "
+                            f"{replacements['numeros_cuenta']} account numbers, "
+                            f"{replacements['direcciones']} addresses."
+                        )
+                        logger.info(log_message)
+
                     await update.message.reply_text("Procesando tu archivo con Gemini... 🧠")
-                    structured_summary = await self._summarize_with_gemini(file_content)
+                    structured_summary = await self._summarize_with_gemini(sanitized_content)
                     
                     context.user_data['file_summary_data'] = structured_summary # Store the structured data
-                    context.user_data['original_file_content'] = file_content # Store for deeper insights
+                    # Store the original, unsanitized content for deeper insights if ever needed,
+                    # but be careful not to send it to the AI again without sanitization.
+                    context.user_data['original_file_content'] = file_content
 
                     # Format the initial message to the user using the structured summary
                     summary_text = structured_summary.get("Resumen General", "No se pudo generar un resumen general.")
@@ -242,16 +273,31 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
     async def _summarize_with_gemini(self, text: str) -> dict:
         """Summarizes text using Gemini and extracts key insights and questions."""
         prompt = (
-            f"""Eres un asistente financiero experto y un tutor universitario. Analiza el siguiente documento y proporciona una síntesis estructurada en Español Latino Conversacional.
-Tu respuesta debe seguir estrictamente este formato Markdown, incluyendo los encabezados:
+            f"""Eres un asistente de extracción de datos y analista financiero. Tu trabajo se divide en dos etapas.
+
+**ETAPA 1: EXTRACCIÓN Y ESTRUCTURACIÓN DE DATOS**
+Analiza el siguiente texto extraído de un estado de cuenta bancario. Ignora cualquier texto que no sea una transacción (publicidad, encabezados, pies de página). Extrae únicamente los movimientos de cuenta y preséntalos como una lista de transacciones.
+
+**Texto del documento:**
+---
+{text}
+---
+
+**Fin del texto del documento.**
+
+Ahora, de ese texto, extrae las transacciones clave.
+
+**ETAPA 2: ANÁLISIS FINANCIERO**
+Basándote **únicamente en la lista de transacciones que extrajiste en la Etapa 1**, genera un análisis financiero. Tu respuesta final debe seguir estrictamente este formato Markdown:
 
 ### Resumen General
-[Aquí va un resumen conciso del documento, destacando los puntos financieros más relevantes.]
+[Aquí va un resumen conciso de la actividad financiera del período, mencionando el gasto total y cualquier dato relevante.]
 
 ### Puntos Clave Identificados
-- [Punto clave 1: Breve descripción]
-- [Punto clave 2: Breve descripción]
-- [Punto clave 3: Breve descripción]"""
+- [Punto clave 1: Describe el gasto más significativo. Ej: "El gasto principal fue un pago móvil de 809,00."]
+- [Punto clave 2: Menciona los cargos recurrentes o comisiones. Ej: "Se identificaron comisiones por mantenimiento de cuenta y uso de canales por un total de X."]
+- [Punto clave 3: Resume el estado final de la cuenta. Ej: "La cuenta terminó con un saldo cercano a cero, indicando que casi todo el ingreso fue gastado."]
+"""
         )
         raw_response = await self._generate_content_stream(prompt)
 
@@ -276,6 +322,39 @@ Tu respuesta debe seguir estrictamente este formato Markdown, incluyendo los enc
                     summary_data[current_section] = [item.lstrip('- ').strip() for item in items]
         
         return summary_data
+
+    def _sanitize_text(self, text: str) -> tuple[str, dict]:
+        """Removes or anonymizes PII from the text and counts replacements."""
+        replacements = {}
+
+        # Anonymize names (assuming they are in ALL CAPS and reasonably long)
+        # This regex looks for sequences of 10 or more uppercase letters and spaces,
+        # which is a heuristic for full names.
+        text, count = re.subn(r'\b[A-ZÁÉÍÓÚÑ\s]{10,}\b', '[NOMBRE REMOVIDO]', text)
+        replacements['nombres'] = count
+
+        # Anonymize account numbers (long sequences of digits)
+        text, count = re.subn(r'\b\d{10,}\b', '[NUMERO_CUENTA REMOVIDO]', text)
+        replacements['numeros_cuenta'] = count
+
+        # Anonymize addresses based on common keywords up to a postal code indicator
+        # This is a broad-stroke approach and might need refinement.
+        text, count = re.subn(r'(URB\.|CALLE|EDF\.|PARROQUIA)[\s\S]*?(Z\.P\.)', '[DIRECCION REMOVIDA]', text, flags=re.IGNORECASE)
+        replacements['direcciones'] = count
+
+        return text, replacements
+
+    def _clean_ocr_text(self, text: str) -> str:
+        """Cleans raw OCR output by normalizing whitespace and removing non-standard characters."""
+        # 1. Normaliza todos los tipos de espacios (espacios, tabs, newlines) a un solo espacio.
+        text = re.sub(r'\s+', ' ', text)
+        
+        # 2. Elimina cualquier carácter que no sea alfanumérico, puntuación común o símbolo de moneda.
+        # Esto es un filtro agresivo para eliminar basura invisible que puede romper la API.
+        # Mantenemos letras (incluyendo acentos), números, y puntuación esencial.
+        text = re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s.,$:€-]', '', text)
+        
+        return text.strip()
 
     def _extract_income_from_text(self, text: str) -> float | None:
         """Extracts a numerical income from text, handling various phrases and formats."""
