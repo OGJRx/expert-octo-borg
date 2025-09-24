@@ -214,9 +214,13 @@ class BorgotronBot:
         )
         application.add_handler(presupuesto_handler)
         
-        # Iniciar polling
-        logger.info("Bot started polling...")
-        await application.run_polling()
+        # Iniciar el bot y mantenerlo corriendo
+        logger.info("Starting bot...")
+        async with application:
+            await application.start()
+            await application.updater.start_polling()
+            logger.info("Bot started polling...")
+            await asyncio.Future()  # Mantener el bot corriendo
 
 if __name__ == '__main__':
     import asyncio
