@@ -164,8 +164,11 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
                     return ASK_FOR_INPUT
 
                 if file_content:
-                    # Sanitize the content to remove PII before sending to the AI
-                    sanitized_content, replacements = self._sanitize_text(file_content)
+                    # PASO 1: Limpiar el output crudo del OCR
+                    cleaned_content = self._clean_ocr_text(file_content)
+                    
+                    # PASO 2: Sanitizar PII del texto ya limpio
+                    sanitized_content, replacements = self._sanitize_text(cleaned_content)
 
                     # Log the sanitization results
                     total_replacements = sum(replacements.values())
@@ -340,6 +343,18 @@ Basándote **únicamente en la lista de transacciones que extrajiste en la Etapa
         replacements['direcciones'] = count
 
         return text, replacements
+
+    def _clean_ocr_text(self, text: str) -> str:
+        """Cleans raw OCR output by normalizing whitespace and removing non-standard characters."""
+        # 1. Normaliza todos los tipos de espacios (espacios, tabs, newlines) a un solo espacio.
+        text = re.sub(r'\s+', ' ', text)
+        
+        # 2. Elimina cualquier carácter que no sea alfanumérico, puntuación común o símbolo de moneda.
+        # Esto es un filtro agresivo para eliminar basura invisible que puede romper la API.
+        # Mantenemos letras (incluyendo acentos), números, y puntuación esencial.
+        text = re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s.,$:€-]', '', text)
+        
+        return text.strip()
 
     def _extract_income_from_text(self, text: str) -> float | None:
         """Extracts a numerical income from text, handling various phrases and formats."""
