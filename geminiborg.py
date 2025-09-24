@@ -1,7 +1,8 @@
+import json  # Agregado para parsing seguro de JSON de Gemini
 import logging
 import asyncio
 import google.generativeai as genai
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CommandHandler, filters
 from telegram.constants import ParseMode
 from telegram import ReplyKeyboardRemove
@@ -182,38 +183,25 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
                         logger.info(log_message)
 
                     await update.message.reply_text("Procesando tu archivo con Gemini... 🧠")
+                    
                     structured_summary = await self._summarize_with_gemini(sanitized_content)
-                    
-                    context.user_data['file_summary_data'] = structured_summary # Store the structured data
-                    # Store the original, unsanitized content for deeper insights if ever needed,
-                    # but be careful not to send it to the AI again without sanitization.
-                    context.user_data['original_file_content'] = file_content
+                    context.user_data['financial_json'] = structured_summary  # Almacenamos el JSON para reutilización
 
-                    # Format the initial message to the user using the structured summary
-                    summary_text = structured_summary.get("Resumen General", "No se pudo generar un resumen general.")
-                    key_points = "\n".join([f"- {p}" for p in structured_summary.get("Puntos Clave Identificados", [])])
-                    suggested_questions = "\n".join([f"- {q}" for q in structured_summary.get("Preguntas de Seguimiento Sugeridas", [])])
-
-                    # Formateamos los puntos clave y preguntas para que se vean como una lista.
-                    key_points_formatted = "\n".join([f"• {p}" for p in structured_summary.get("Puntos Clave Identificados", [])])
-                    suggested_questions_formatted = "\n".join([f"• {q}" for q in structured_summary.get("Preguntas de Seguimiento Sugeridas", [])])
-
-                    initial_response_message = (
-                        f"¡Listo! He analizado tu documento. 📄\n\n"
-                        f"`Resumen General del Documento:`\n"
-                        f"> {summary_text}\n\n"  # <-- ¡Aquí usamos la cita en bloque!
-                        f"`Puntos Clave Identificados:`\n"
-                        f"{key_points_formatted}\n\n"
-                        f"¿Hay algo de esto que quieras explorar a fondo o generamos tu presupuesto ahora?\n\n"
-                        f"*Sugerencias para preguntar:*\n"
-                        f"{suggested_questions_formatted}"
+                    # Eliminamos el initial_response_message estático; ahora enviamos un resumen breve basado en JSON
+                    resumen = structured_summary['resumen']
+                    initial_message = (
+                        f"¡Análisis completado! 📊\n"
+                        f"Saldo Inicial: {resumen['saldo_inicial']:.2f}\n"
+                        f"Saldo Final: {resumen['saldo_final']:.2f}\n"
+                        f"Total Ingresos: {resumen['total_ingresos']:.2f}\n"
+                        f"Total Egresos: {resumen['total_egresos']:.2f}\n\n"
+                        f"Elige una opción abajo para insights personalizados."
                     )
-                    
-                    escaped_initial_response_message = escape_markdown_v2(initial_response_message)
-                    await update.message.reply_text(
-                        escaped_initial_response_message,
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
+                    escaped_message = escape_markdown_v2(initial_message)
+                    await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
+
+                    # Enviamos el menú inline contextual
+                    await self._send_contextual_inline_menu(update, context, structured_summary)
                     return ASK_DEEPER_INSIGHT
                 else:
                     await update.message.reply_text("El archivo está vacío o no se pudo leer. Por favor, intenta con otro.")
@@ -228,6 +216,41 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
         else:
             await update.message.reply_text("Hubo un problema con la carga de tu archivo. Por favor, intenta de nuevo.")
         return ConversationHandler.END
+
+    async def _send_contextual_inline_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, financial_json: dict):
+        """Genera y envía un menú inline dinámico basado en el JSON financiero."""
+        buttons = self._get_contextual_buttons(financial_json)
+        if not buttons:
+            await update.message.reply_text("No se detectaron insights específicos. ¿Quieres un análisis genérico?")
+            return
+
+        keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Opciones basadas en tu análisis:", reply_markup=reply_markup)
+
+    def _get_contextual_buttons(self, financial_json: dict) -> list:
+        """Devuelve lista de InlineKeyboardButton basada en reglas contextuales del JSON."""
+        buttons = []
+        transacciones = financial_json.get('transacciones', [])
+        resumen = financial_json.get('resumen', {})
+        insights = financial_json.get('insights_detectados', {})
+
+        # Botón prioritario: Revisar transacciones
+        buttons.append(InlineKeyboardButton("Revisar Transacciones Categorizadas", callback_data='review_transactions'))
+
+        if any(tx['categoria_sugerida'] == 'Préstamo' for tx in transacciones):
+            buttons.append(InlineKeyboardButton("Asesor de Deudas", callback_data='debt_advisor'))
+
+        if resumen.get('saldo_final', 0) > 0 and resumen.get('total_ingresos', 0) > resumen.get('total_egresos', 0):
+            buttons.append(InlineKeyboardButton("Crear Portafolio de Inversión", callback_data='investment_portfolio'))
+
+        if abs(resumen.get('total_ingresos', 0) - resumen.get('total_egresos', 0)) / max(1, resumen.get('total_ingresos', 0)) < 0.1:
+            buttons.append(InlineKeyboardButton("Calcular Fondo de Emergencia", callback_data='emergency_fund'))
+
+        if len(insights.get('pagos_recurrentes', [])) > 1:
+            buttons.append(InlineKeyboardButton("Ideas de Ingreso Pasivo", callback_data='passive_income'))
+
+        return buttons
 
     async def handle_deeper_insight(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handles user's request for deeper insight or proceeds to budget generation."""
@@ -271,57 +294,62 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
             return ASK_DEEPER_INSIGHT
 
     async def _summarize_with_gemini(self, text: str) -> dict:
-        """Summarizes text using Gemini and extracts key insights and questions."""
+        """Utiliza Gemini para parsear el texto en un JSON estructurado de datos financieros."""
         prompt = (
-            f"""Eres un asistente de extracción de datos y analista financiero. Tu trabajo se divide en dos etapas.
+            """Eres un parser de datos financieros. Extrae la siguiente información del texto y devuélvela estrictamente en formato JSON.
+No agregues texto adicional, explicaciones o Markdown. Solo el JSON válido.
 
-**ETAPA 1: EXTRACCIÓN Y ESTRUCTURACIÓN DE DATOS**
-Analiza el siguiente texto extraído de un estado de cuenta bancario. Ignora cualquier texto que no sea una transacción (publicidad, encabezados, pies de página). Extrae únicamente los movimientos de cuenta y preséntalos como una lista de transacciones.
+<input>{text}</input>
 
-**Texto del documento:**
----
-{text}
----
+<output_schema>
+{
+  "resumen": {
+    "saldo_inicial": float,
+    "saldo_final": float,
+    "total_ingresos": float,
+    "total_egresos": float
+  },
+  "transacciones": [
+    {
+      "fecha": "YYYY-MM-DD",
+      "descripcion": "string",
+      "monto": float,
+      "tipo": "ingreso|egreso",
+      "categoria_sugerida": "Nómina|Comida|Transporte|Suscripciones|Préstamo|Comisiones|Otro"
+    }
+  ],
+  "insights_detectados": {
+    "pagos_recurrentes": ["Netflix", "Pago Préstamo Coche"],
+    "fuentes_ingreso": ["Nómina Empresa X"],
+    "comisiones_bancarias": float
+  }
+}
+</output_schema>
 
-**Fin del texto del documento.**
-
-Ahora, de ese texto, extrae las transacciones clave.
-
-**ETAPA 2: ANÁLISIS FINANCIERO**
-Basándote **únicamente en la lista de transacciones que extrajiste en la Etapa 1**, genera un análisis financiero. Tu respuesta final debe seguir estrictamente este formato Markdown:
-
-### Resumen General
-[Aquí va un resumen conciso de la actividad financiera del período, mencionando el gasto total y cualquier dato relevante.]
-
-### Puntos Clave Identificados
-- [Punto clave 1: Describe el gasto más significativo. Ej: "El gasto principal fue un pago móvil de 809,00."]
-- [Punto clave 2: Menciona los cargos recurrentes o comisiones. Ej: "Se identificaron comisiones por mantenimiento de cuenta y uso de canales por un total de X."]
-- [Punto clave 3: Resume el estado final de la cuenta. Ej: "La cuenta terminó con un saldo cercano a cero, indicando que casi todo el ingreso fue gastado."]
-"""
+Instrucciones:
+- Analiza solo transacciones financieras; ignora encabezados, pies de página o texto no relevante.
+- Para 'categoria_sugerida', infiere basándote en descripción (e.g., 'Netflix' -> 'Suscripciones').
+- Calcula totals en 'resumen' sumando montos por tipo.
+- En 'insights_detectados', identifica recurrentes (mismo descripción >1 vez), fuentes únicas de ingresos, y suma comisiones.
+- Si un valor no se detecta, usa 0.0 para floats o [] para listas.
+""".replace("{text}", text)
         )
+        
         raw_response = await self._generate_content_stream(prompt)
-
-        # Parse the structured response
-        summary_data = {}
-        sections = re.split(r'''### (Resumen General|Puntos Clave Identificados|Áreas de Interés/Preocupación|Preguntas de Seguimiento Sugeridas)
-''', raw_response)
         
-        current_section = None
-        for i, section_content in enumerate(sections):
-            if i == 0 and not section_content.strip(): # Skip initial empty string if split starts with a delimiter
-                continue
-            if section_content in ["Resumen General", "Puntos Clave Identificados", "Áreas de Interés/Preocupación", "Preguntas de Seguimiento Sugeridas"]:
-                current_section = section_content
-                summary_data[current_section] = []
-            elif current_section:
-                # Clean up content and split into lines/items
-                items = [item.strip() for item in section_content.split('\n') if item.strip()]
-                if current_section == "Resumen General":
-                    summary_data[current_section] = "\n".join(items)
-                else:
-                    summary_data[current_section] = [item.lstrip('- ').strip() for item in items]
-        
-        return summary_data
+        try:
+            # Limpiamos el raw_response para quitar ```json y ```
+            cleaned_response = re.sub(r'```json\n|```', '', raw_response.strip())
+            summary_data = json.loads(cleaned_response)
+            logger.info("JSON parseado exitosamente del PDF.")
+            return summary_data
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parseando JSON de Gemini: {e}. Raw: {raw_response}")
+            return {
+                "resumen": {"saldo_inicial": 0.0, "saldo_final": 0.0, "total_ingresos": 0.0, "total_egresos": 0.0},
+                "transacciones": [],
+                "insights_detectados": {"pagos_recurrentes": [], "fuentes_ingreso": [], "comisiones_bancarias": 0.0}
+            }
 
     def _sanitize_text(self, text: str) -> tuple[str, dict]:
         """Removes or anonymizes PII from the text and counts replacements."""
