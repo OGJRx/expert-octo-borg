@@ -242,16 +242,31 @@ Mi meta es que domines tus finanzas como un experto. ¡Empecemos a construir tu 
     async def _summarize_with_gemini(self, text: str) -> dict:
         """Summarizes text using Gemini and extracts key insights and questions."""
         prompt = (
-            f"""Eres un asistente financiero experto y un tutor universitario. Analiza el siguiente documento y proporciona una síntesis estructurada en Español Latino Conversacional.
-Tu respuesta debe seguir estrictamente este formato Markdown, incluyendo los encabezados:
+            f"""Eres un asistente de extracción de datos y analista financiero. Tu trabajo se divide en dos etapas.
+
+**ETAPA 1: EXTRACCIÓN Y ESTRUCTURACIÓN DE DATOS**
+Analiza el siguiente texto extraído de un estado de cuenta bancario. Ignora cualquier texto que no sea una transacción (publicidad, encabezados, pies de página). Extrae únicamente los movimientos de cuenta y preséntalos como una lista de transacciones.
+
+**Texto del documento:**
+---
+{text}
+---
+
+**Fin del texto del documento.**
+
+Ahora, de ese texto, extrae las transacciones clave.
+
+**ETAPA 2: ANÁLISIS FINANCIERO**
+Basándote **únicamente en la lista de transacciones que extrajiste en la Etapa 1**, genera un análisis financiero. Tu respuesta final debe seguir estrictamente este formato Markdown:
 
 ### Resumen General
-[Aquí va un resumen conciso del documento, destacando los puntos financieros más relevantes.]
+[Aquí va un resumen conciso de la actividad financiera del período, mencionando el gasto total y cualquier dato relevante.]
 
 ### Puntos Clave Identificados
-- [Punto clave 1: Breve descripción]
-- [Punto clave 2: Breve descripción]
-- [Punto clave 3: Breve descripción]"""
+- [Punto clave 1: Describe el gasto más significativo. Ej: "El gasto principal fue un pago móvil de 809,00."]
+- [Punto clave 2: Menciona los cargos recurrentes o comisiones. Ej: "Se identificaron comisiones por mantenimiento de cuenta y uso de canales por un total de X."]
+- [Punto clave 3: Resume el estado final de la cuenta. Ej: "La cuenta terminó con un saldo cercano a cero, indicando que casi todo el ingreso fue gastado."]
+"""
         )
         raw_response = await self._generate_content_stream(prompt)
 
