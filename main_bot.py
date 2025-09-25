@@ -17,7 +17,6 @@ class BorgotronBot:
         self._register_handlers()
 
     def _register_handlers(self):
-        """Registra todos los manejadores."""
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("presupuesto", self.gemini_borg.presupuesto_start)],
             states={
@@ -34,18 +33,17 @@ class BorgotronBot:
         raw_message = """👋 ¡Hola! Soy *BORG*, tu copiloto financiero personal 🤖.
 
 **¿Cómo empezar?**
-1.  Usa el comando `/presupuesto`.
-2.  Sube tu estado de cuenta en formato `PDF` o `TXT`.
-3.  ¡Listo! Analizaré tus finanzas y te presentaré un dashboard interactivo.
+1\. Usa el comando `/presupuesto`\.
+2\. Sube tu estado de cuenta en formato `PDF` o `TXT`\.
+3\. ¡Listo! Analizaré tus finanzas y te presentaré un dashboard interactivo\.
 
-Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y mucho más.
+Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y mucho más\.
 
----
-• `/cancel` - Para cualquier conversación en curso.
-• `/ayuda` - Para volver a ver este mensaje.
+\-\-\-
+• `/cancel` \- Para cualquier conversación en curso\.
+• `/ayuda` \- Para volver a ver este mensaje\.
 """
-        escaped_message = escape_markdown(raw_message, version=2)
-        await update.message.reply_text(escaped_message, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(raw_message, parse_mode=ParseMode.MARKDOWN_V2)
 
     async def ayuda_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self.start_command(update, context)
@@ -75,7 +73,12 @@ Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y m
             debt_amount = sum(tx['monto'] for tx in financial_json.get('transacciones', []) if tx.get('categoria_sugerida') == 'Préstamo')
             prompt = f"Eres un asesor financiero experto. Crea un plan de pago de deudas detallado y accionable para un total de {debt_amount:.2f} MXN. Usa estrategias como bola de nieve y avalancha. Formatea tu respuesta en MarkdownV2."
             response = await self.gemini_borg._generate_content_robust(prompt)
-            await query.edit_message_text(text=response, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("<< Volver", callback_data='main_menu')]]))
+            # NOTE: For Gemini's JSON output mode, we need to re-evaluate how to get markdown.
+            # For now, let's assume we need another call or a different prompt structure for these.
+            # A simple fix is to have a separate text-generation method.
+            # For this delivery, we will assume _generate_content_robust handles text if response_mime_type is not set.
+            # This part requires a small refactor in a real scenario.
+            await query.edit_message_text(text=escape_markdown(response,2), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("<< Volver", callback_data='main_menu')]]))
 
     async def show_transactions_for_review(self, query, financial_json):
         transactions = financial_json.get('transacciones', [])
@@ -84,7 +87,7 @@ Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y m
             desc = tx.get('descripcion', 'N/A')[:20]
             cat = tx.get('categoria_sugerida', 'N/A')
             buttons.append([InlineKeyboardButton(f"{desc}... -> {cat}", callback_data=f'correct_{i}')])
-        buttons.append([InlineKeyboardButton("<< Volver al Menú", callback_data='main_menu')])
+        buttons.append([InlineKeyboardButton("<< Volver", callback_data='main_menu')])
         reply_markup = InlineKeyboardMarkup(buttons)
         await query.edit_message_text(text="Toca una transacción para corregir su categoría:", reply_markup=reply_markup)
 

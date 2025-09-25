@@ -26,14 +26,9 @@ class GeminiBorg:
         self.model = genai.GenerativeModel(self.model_name)
 
     def setup_ai_client(self):
-        """Configurar conexión con Google AI Client"""
         genai.configure(api_key=self.config.GOOGLE_AI_KEY)
 
     async def _generate_content_robust(self, prompt: str, retries: int = 3, delay: int = 5) -> str:
-        """
-        Generates content using a robust, non-streaming async call to Gemini.
-        This is ideal for tasks requiring a complete, structured response like JSON.
-        """
         generation_config = genai.types.GenerationConfig(
             temperature=0.2,
             max_output_tokens=8192,
@@ -45,7 +40,6 @@ class GeminiBorg:
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
-
         for attempt in range(retries):
             try:
                 response = await self.model.generate_content_async(
@@ -59,12 +53,10 @@ class GeminiBorg:
                 if attempt < retries - 1:
                     await asyncio.sleep(delay)
                 else:
-                    return '{"error": "Lo siento, hubo un error al generar la respuesta con Gemini después de varios intentos."}'
-        
-        return '{"error": "La API de Gemini no devolvió contenido después de varios intentos."}'
+                    return '{"error": "Hubo un error al generar la respuesta con Gemini."}'
+        return '{"error": "La API de Gemini no devolvió contenido."}'
 
     async def presupuesto_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Starts the /presupuesto conversation."""
         raw_message = """👋 ¡Hola! Soy *BORG*, tu **copiloto financiero** 🤖.
 
 Sube un estado de cuenta o un documento financiero en formato `PDF` o `TXT`.
@@ -77,7 +69,6 @@ Lo analizaré para darte un resumen inteligente, detectar patrones y ofrecerte a
         return ASK_FOR_INPUT
 
     async def handle_file_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Processes the uploaded file, gets structured JSON, and shows the dynamic dashboard."""
         document = update.message.document
         if not document or not (document.file_name.lower().endswith('.pdf') or document.file_name.lower().endswith('.txt')):
             await update.message.reply_text("Por favor, sube un archivo en formato PDF o TXT.")
@@ -95,79 +86,78 @@ Lo analizaré para darte un resumen inteligente, detectar patrones y ofrecerte a
                 images = convert_from_path(file_path)
                 for image in images:
                     file_content += pytesseract.image_to_string(image, lang='spa')
-            else: # .txt
+            else:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     file_content = f.read()
 
             if not file_content.strip():
-                await update.message.reply_text("El archivo está vacío o no se pudo leer. Intenta con otro.")
+                await update.message.reply_text("El archivo está vacío o no se pudo leer.")
                 return ASK_FOR_INPUT
 
             cleaned_content = self._clean_ocr_text(file_content)
-            
             structured_summary = await self._summarize_with_gemini(cleaned_content)
             
             if 'error' in structured_summary:
-                error_message = f"No pude procesar el documento. Razón: {structured_summary['error']}"
-                await update.message.reply_text(error_message)
+                await update.message.reply_text(f"No pude procesar el documento. Razón: {structured_summary['error']}")
                 return ConversationHandler.END
 
             context.user_data['financial_json'] = structured_summary
 
             resumen = structured_summary.get('resumen', {})
-            summary_text = (
+            final_message = (
                 f"*Análisis Completado* 📊\n\n"
                 f"Saldo Inicial: `{resumen.get('saldo_inicial', 0):.2f}`\n"
                 f"Saldo Final: `{resumen.get('saldo_final', 0):.2f}`\n"
                 f"Total Ingresos: `{resumen.get('total_ingresos', 0):.2f}`\n"
                 f"Total Egresos: `{resumen.get('total_egresos', 0):.2f}`\n\n"
-                f"He generado un panel de control dinámico basado en tus datos."
+                f"*Panel de Control Principal:*"
             )
-            await update.message.reply_text(escape_markdown(summary_text, 2), parse_mode=ParseMode.MARKDOWN_V2)
+
+            buttons = self._get_contextual_buttons(structured_summary)
+            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(final_message, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
             
-            await self._send_contextual_inline_menu(update, context, structured_summary)
             return ASK_DEEPER_INSIGHT
 
         except Exception as e:
             logger.error(f"Error processing file: {e}", exc_info=True)
-            await update.message.reply_text(f"Hubo un error crítico al procesar tu archivo. Por favor, intenta de nuevo.")
+            await update.message.reply_text("Hubo un error crítico al procesar tu archivo.")
             return ConversationHandler.END
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
 
     async def _send_contextual_inline_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, financial_json: dict):
-        """Genera y envía un menú inline dinámico basado en el JSON financiero."""
         buttons = self._get_contextual_buttons(financial_json)
         keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if update.callback_query:
-            await update.callback_query.edit_message_text("Panel de Control Principal:", reply_markup=reply_markup)
+            await update.callback_query.edit_message_text("*Panel de Control Principal:*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
         else:
-            await update.message.reply_text("Panel de Control Principal:", reply_markup=reply_markup)
+            await update.message.reply_text("*Panel de Control Principal:*", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
     def _get_contextual_buttons(self, financial_json: dict) -> list:
-        """Devuelve lista de InlineKeyboardButton basada en reglas contextuales del JSON."""
         buttons = []
         transacciones = financial_json.get('transacciones', [])
         resumen = financial_json.get('resumen', {})
 
-        buttons.append(InlineKeyboardButton("✅ Revisar Transacciones Categorizadas", callback_data='review_transactions'))
+        buttons.append(InlineKeyboardButton("🔍 Revisar Transacciones", callback_data='review_transactions'))
 
         if any(tx.get('categoria_sugerida') == 'Préstamo' for tx in transacciones):
-            buttons.append(InlineKeyboardButton("💳 Asesor de Deudas", callback_data='debt_advisor'))
+            buttons.append(InlineKeyboardButton("💳 Plan Deudas", callback_data='debt_advisor'))
 
         if resumen.get('saldo_final', 0) > 5000:
-            buttons.append(InlineKeyboardButton("📈 Crear Portafolio de Inversión", callback_data='investment_portfolio'))
+            buttons.append(InlineKeyboardButton("📈 Plan Inversión", callback_data='investment_portfolio'))
 
         if resumen.get('total_egresos', 0) > resumen.get('total_ingresos', 0) * 0.9:
-            buttons.append(InlineKeyboardButton("🆘 Calcular Fondo de Emergencia", callback_data='emergency_fund'))
+            buttons.append(InlineKeyboardButton("🆘 Fondo Emergencia", callback_data='emergency_fund'))
 
         return buttons
 
     async def _summarize_with_gemini(self, text: str) -> dict:
-        """Utiliza Gemini para parsear el texto en un JSON estructurado de datos financieros."""
         prompt = f"""
 Eres un experto analista financiero. Analiza el siguiente texto de un estado de cuenta y extráelo a un formato JSON.
 Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
@@ -178,27 +168,11 @@ Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
 
 <output_schema>
 {{
-  "resumen": {{
-    "saldo_inicial": float,
-    "saldo_final": float,
-    "total_ingresos": float,
-    "total_egresos": float
-  }},
-  "transacciones": [
-    {{
-      "fecha": "YYYY-MM-DD",
-      "descripcion": "string",
-      "monto": float,
-      "tipo": "ingreso|egreso",
-      "categoria_sugerida": "Nómina|Comida|Transporte|Suscripciones|Préstamo|Comisiones|Vivienda|Ocio|Otro"
-    }}
-  ],
-  "insights_detectados": {{
-    "pagos_recurrentes": ["string"],
-    "fuentes_ingreso": ["string"],
-    "comisiones_bancarias": float
-  }}
+  "resumen": {{ "saldo_inicial": float, "saldo_final": float, "total_ingresos": float, "total_egresos": float }},
+  "transacciones": [ {{ "fecha": "YYYY-MM-DD", "descripcion": "string", "monto": float, "tipo": "ingreso|egreso", "categoria_sugerida": "Nómina|Comida|Transporte|Suscripciones|Préstamo|Comisiones|Vivienda|Ocio|Otro" }} ],
+  "insights_detectados": {{ "pagos_recurrentes": ["string"], "fuentes_ingreso": ["string"], "comisiones_bancarias": float }}
 }}
+</output_schema>
 """
         raw_response = await self._generate_content_robust(prompt)
         try:
@@ -213,7 +187,6 @@ Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
             return {"error": "La respuesta de la IA no fue un JSON válido."}
 
     def _clean_ocr_text(self, text: str) -> str:
-        """Cleans raw OCR output, preserving line breaks."""
         text = re.sub(r'[ \t]+', ' ', text)
         text = re.sub(r'[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\n\s.,$:€-]', '', text)
         return text.strip()
