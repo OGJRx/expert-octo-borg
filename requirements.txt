@@ -6,3 +6,4 @@ PyPDF2
 pytesseract
 pdf2image
 pytest
+pytest-asyncio
