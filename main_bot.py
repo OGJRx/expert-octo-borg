@@ -1,6 +1,9 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
+from telegram.ext import (
+    Application, CommandHandler, ContextTypes, ConversationHandler,
+    MessageHandler, filters, CallbackQueryHandler, PicklePersistence
+)
 from config import Config
 from geminiborg import GeminiBorg, ASK_FOR_INPUT, ASK_DEEPER_INSIGHT
 
@@ -14,7 +17,17 @@ class BorgotronBot:
         """Initializes the bot, its handlers, and the underlying GeminiBorg logic."""
         self.config = Config()
         self.gemini_borg = GeminiBorg()
-        self.application = Application.builder().token(self.config.TELEGRAM_TOKEN).build()
+
+        # Create a persistence object.
+        persistence = PicklePersistence(filepath="borg_persistence")
+
+        # Add persistence to the application builder.
+        self.application = (
+            Application.builder()
+            .token(self.config.TELEGRAM_TOKEN)
+            .persistence(persistence)
+            .build()
+        )
         self._register_handlers()
 
     def _register_handlers(self):
@@ -29,6 +42,9 @@ class BorgotronBot:
                 ],
             },
             fallbacks=[CommandHandler("cancel", self.cancel)],
+            # Make the conversation persistent
+            name="presupuesto_conv",
+            persistent=True,
         )
         self.application.add_handler(conv_handler)
         self.application.add_handler(CommandHandler("start", self.start_command))
@@ -93,8 +109,6 @@ Para volver a ver este mensaje, usa /ayuda."""
         elif data == 'emergency_fund':
             await self._show_emergency_fund(update, context)
 
-    # --- Refactored Action Handlers ---
-
     async def _show_debt_advisor(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Generates and displays a personalized debt payment plan."""
         financial_json = context.user_data.get('financial_json', {})
@@ -123,8 +137,6 @@ Para volver a ver este mensaje, usa /ayuda."""
             await update.callback_query.edit_message_text(text=text, reply_markup=reply_markup)
         else:
             await update.message.reply_text(text=text, reply_markup=reply_markup)
-
-    # --- Interactive Transaction Review Handlers ---
 
     async def show_transactions_for_review(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Displays a list of transactions for the user to review and correct."""
