@@ -1,14 +1,10 @@
-import json
-import logging
-import asyncio
+import json, logging, asyncio, re, os
 import google.generativeai as genai
 from telegram import Update
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
 import pytesseract
 from config import Config
-import re
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -24,22 +20,13 @@ class GeminiBorg:
 
     async def _generate_content_robust(self, prompt: str, is_json: bool = True) -> str:
         generation_config = genai.types.GenerationConfig(
-            temperature=0.2,
+            temperature=0.7 if not is_json else 0.2,
             max_output_tokens=4096,
             response_mime_type="application/json" if is_json else "text/plain"
         )
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
+        safety_settings = [{"category": c, "threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
         try:
-            response = await self.model.generate_content_async(
-                contents=[prompt],
-                generation_config=generation_config,
-                safety_settings=safety_settings
-            )
+            response = await self.model.generate_content_async([prompt], generation_config=generation_config, safety_settings=safety_settings)
             return response.text
         except Exception as e:
             logger.error(f"Error generating content with Gemini: {e}", exc_info=True)
@@ -62,32 +49,17 @@ class GeminiBorg:
             else:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     file_content = f.read()
-
-            if not file_content.strip():
-                return {"error": "El archivo está vacío."}
+            if not file_content.strip(): return {"error": "El archivo está vacío."}
             cleaned_content = self._clean_ocr_text(file_content)
             return await self._summarize_with_gemini(cleaned_content)
+        except Exception as e:
+            logger.error(f"Error processing file: {e}", exc_info=True)
+            return {"error": "Hubo un error crítico al procesar tu archivo."}
         finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(file_path): os.remove(file_path)
 
     async def _summarize_with_gemini(self, text: str) -> dict:
-        prompt = f"""
-Eres un experto analista financiero. Analiza el siguiente texto de un estado de cuenta y extráelo a un formato JSON.
-Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
-
-<input_text>
-{text}
-</input_text>
-
-<output_schema>
-{{
-  "resumen": {{ "saldo_inicial": float, "saldo_final": float, "total_ingresos": float, "total_egresos": float }},
-  "transacciones": [ {{ "fecha": "YYYY-MM-DD", "descripcion": "string", "monto": float, "tipo": "ingreso|egreso", "categoria_sugerida": "Nómina|Comida|Transporte|Suscripciones|Préstamo|Comisiones|Vivienda|Ocio|Otro" }} ],
-  "insights_detectados": {{ "pagos_recurrentes": ["string"], "fuentes_ingreso": ["string"], "comisiones_bancarias": float }}
-}}
-</output_schema>
-"""
+        prompt = f"""Eres un parser financiero. Extrae los datos del texto en formato JSON. Solo el JSON. <input_text>{text}</input_text>"""
         raw_response = await self._generate_content_robust(prompt, is_json=True)
         try:
             return json.loads(re.sub(r'```json\n|```', '', raw_response.strip()))
@@ -110,4 +82,6 @@ Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
             actions['fondo_emergencia'] = "Tus gastos son altos. Usa `/fondo_emergencia` para calcular tu red de seguridad."
         if resumen.get('saldo_final', 0) > 5000:
             actions['plan_inversion'] = "Tienes un excedente. Usa `/plan_inversion` para explorar opciones."
+        if not actions:
+            actions['generar_oportunidad'] = "Tus finanzas parecen estables. ¿Quieres un plan de acción para generar ingresos extra? Usa `/generar_oportunidad`."
         return actions
