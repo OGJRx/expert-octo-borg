@@ -2,8 +2,7 @@ import json
 import logging
 import asyncio
 import google.generativeai as genai
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram import Update, InlineKeyboardButton
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
 import pytesseract
@@ -12,9 +11,6 @@ import re
 import os
 
 logger = logging.getLogger(__name__)
-
-# Conversation states
-ASK_FOR_INPUT, ASK_DEEPER_INSIGHT = range(2)
 
 class GeminiBorg:
     """Handles all the core logic for the financial analysis bot."""
@@ -29,22 +25,14 @@ class GeminiBorg:
         """Configures the Google Generative AI client with the API key."""
         genai.configure(api_key=self.config.GOOGLE_AI_KEY)
 
-    async def _generate_content_robust(self, prompt: str, retries: int = 3, delay: int = 5) -> str:
+    async def _generate_content_robust(self, prompt: str, retries: int = 3, delay: int = 5, is_json: bool = True) -> str:
         """
-        Generates content from the Gemini API with retry logic.
-
-        Args:
-            prompt: The prompt to send to the AI model.
-            retries: The number of times to retry on failure.
-            delay: The delay in seconds between retries.
-
-        Returns:
-            The generated content as a string, or an error JSON.
+        Generates content from the Gemini API with retry logic, supporting both JSON and text.
         """
         generation_config = genai.types.GenerationConfig(
             temperature=0.2,
             max_output_tokens=8192,
-            response_mime_type="application/json"
+            response_mime_type="application/json" if is_json else "text/plain"
         )
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -65,32 +53,21 @@ class GeminiBorg:
                 if attempt < retries - 1:
                     await asyncio.sleep(delay)
                 else:
-                    return '{"error": "Hubo un error al generar la respuesta con Gemini."}'
-        return '{"error": "La API de Gemini no devolvió contenido."}'
+                    error_message = '{"error": "Hubo un error al generar la respuesta con Gemini."}' if is_json else "Hubo un error al generar la respuesta."
+                    return error_message
+        return '{"error": "La API de Gemini no devolvió contenido."}' if is_json else "La API no devolvió contenido."
 
-    async def presupuesto_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Starts the conversation and asks the user to upload a file."""
-        message = """¡Hola! Soy BORG, tu copiloto financiero.
-
-Para comenzar, sube tu estado de cuenta en formato PDF o TXT.
-
-Analizaré tus finanzas para darte un resumen claro y ofrecerte acciones personalizadas. Tu privacidad es mi prioridad."""
+    async def presupuesto_start(self, update: Update, context) -> None:
+        """Asks the user to upload a file."""
+        message = "Para comenzar, sube tu estado de cuenta en formato PDF o TXT."
         await update.message.reply_text(message)
-        return ASK_FOR_INPUT
 
-    async def handle_file_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def process_file_from_update(self, update: Update) -> dict:
         """
-        Processes the uploaded file, generates a financial summary, and presents it
-        to the user with a single, unified message and an interactive keyboard.
+        Processes an uploaded file from a Telegram update, returning a structured summary.
         """
         document = update.message.document
-        if not document or not (document.file_name.lower().endswith('.pdf') or document.file_name.lower().endswith('.txt')):
-            await update.message.reply_text("Por favor, sube un archivo en formato PDF o TXT.")
-            return ASK_FOR_INPUT
-
-        await update.message.reply_text("Procesando tu archivo... Esto puede tardar un momento.")
-        
-        new_file = await context.bot.get_file(document.file_id)
+        new_file = await update.message.effective_attachment.get_file()
         file_path = f"/tmp/{document.file_id}_{document.file_name}"
         await new_file.download_to_drive(file_path)
 
@@ -105,59 +82,17 @@ Analizaré tus finanzas para darte un resumen claro y ofrecerte acciones persona
                     file_content = f.read()
 
             if not file_content.strip():
-                await update.message.reply_text("El archivo está vacío o no se pudo leer.")
-                return ASK_FOR_INPUT
+                return {"error": "El archivo está vacío o no se pudo leer."}
 
             cleaned_content = self._clean_ocr_text(file_content)
-            structured_summary = await self._summarize_with_gemini(cleaned_content)
+            return await self._summarize_with_gemini(cleaned_content)
             
-            if 'error' in structured_summary:
-                await update.message.reply_text(f"No pude procesar el documento. Razón: {structured_summary['error']}")
-                return ConversationHandler.END
-
-            context.user_data['financial_json'] = structured_summary
-
-            resumen = structured_summary.get('resumen', {})
-            final_message = (
-                "Análisis Completado.\n\n"
-                f"Saldo Inicial: {resumen.get('saldo_inicial', 0):.2f}\n"
-                f"Saldo Final: {resumen.get('saldo_final', 0):.2f}\n"
-                f"Total Ingresos: {resumen.get('total_ingresos', 0):.2f}\n"
-                f"Total Egresos: {resumen.get('total_egresos', 0):.2f}\n\n"
-                "A continuación, te presento tu Panel de Control Principal:"
-            )
-
-            buttons = self._get_contextual_buttons(structured_summary)
-            keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            # Send the single, unified message with the keyboard.
-            await update.message.reply_text(final_message, reply_markup=reply_markup)
-            
-            return ASK_DEEPER_INSIGHT
-
         except Exception as e:
             logger.error(f"Error processing file: {e}", exc_info=True)
-            await update.message.reply_text("Hubo un error crítico al procesar tu archivo.")
-            return ConversationHandler.END
+            return {"error": "Hubo un error crítico al procesar tu archivo."}
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
-
-    async def _send_contextual_inline_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, financial_json: dict):
-        """
-        Generates and sends the main control panel. Used for callbacks (e.g., "Back to Menu").
-        """
-        buttons = self._get_contextual_buttons(financial_json)
-        keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        message = "Panel de Control Principal:"
-        if update.callback_query:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
-        else:
-            # This is a fallback and should ideally not be called directly anymore.
-            await update.message.reply_text(message, reply_markup=reply_markup)
 
     def _get_contextual_buttons(self, financial_json: dict) -> list:
         """
@@ -183,9 +118,6 @@ Analizaré tus finanzas para darte un resumen claro y ofrecerte acciones persona
     async def _summarize_with_gemini(self, text: str) -> dict:
         """
         Sends the text content to the Gemini API for financial summarization.
-
-        Returns:
-            A dictionary containing the structured financial summary.
         """
         prompt = f"""
 Eres un experto analista financiero. Analiza el siguiente texto de un estado de cuenta y extráelo a un formato JSON.
@@ -203,7 +135,7 @@ Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
 }}
 </output_schema>
 """
-        raw_response = await self._generate_content_robust(prompt)
+        raw_response = await self._generate_content_robust(prompt, is_json=True)
         try:
             cleaned_response = re.sub(r'```json\n|```', '', raw_response.strip())
             data = json.loads(cleaned_response)
@@ -214,6 +146,12 @@ Tu respuesta DEBE ser únicamente el objeto JSON, sin explicaciones ni markdown.
         except (json.JSONDecodeError, TypeError):
             logger.error(f"Failed to decode JSON from Gemini. Raw response: {raw_response}")
             return {"error": "La respuesta de la IA no fue un JSON válido."}
+
+    async def generate_text_response(self, prompt: str) -> str:
+        """
+        Generates a plain text response from the Gemini API.
+        """
+        return await self._generate_content_robust(prompt, is_json=False)
 
     def _clean_ocr_text(self, text: str) -> str:
         """
