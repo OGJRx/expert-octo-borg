@@ -30,12 +30,12 @@ class BorgotronBot:
         self.application.add_handler(CommandHandler("ayuda", self.ayuda_command))
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        raw_message = """👋 ¡Hola! Soy *BORG*, tu copiloto financiero personal 🤖.
+        raw_message = """👋 ¡Hola! Soy *BORG*, tu copiloto financiero personal 🤖\.
 
 **¿Cómo empezar?**
 1\. Usa el comando `/presupuesto`\.
 2\. Sube tu estado de cuenta en formato `PDF` o `TXT`\.
-3\. ¡Listo! Analizaré tus finanzas y te presentaré un dashboard interactivo\.
+3\. ¡Listo\! Analizaré tus finanzas y te presentaré un dashboard interactivo\.
 
 Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y mucho más\.
 
