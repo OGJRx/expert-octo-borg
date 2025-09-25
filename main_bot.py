@@ -73,12 +73,7 @@ Desde allí, podrás corregir categorías, obtener consejos sobre tus deudas y m
             debt_amount = sum(tx['monto'] for tx in financial_json.get('transacciones', []) if tx.get('categoria_sugerida') == 'Préstamo')
             prompt = f"Eres un asesor financiero experto. Crea un plan de pago de deudas detallado y accionable para un total de {debt_amount:.2f} MXN. Usa estrategias como bola de nieve y avalancha. Formatea tu respuesta en MarkdownV2."
             response = await self.gemini_borg._generate_content_robust(prompt)
-            # NOTE: For Gemini's JSON output mode, we need to re-evaluate how to get markdown.
-            # For now, let's assume we need another call or a different prompt structure for these.
-            # A simple fix is to have a separate text-generation method.
-            # For this delivery, we will assume _generate_content_robust handles text if response_mime_type is not set.
-            # This part requires a small refactor in a real scenario.
-            await query.edit_message_text(text=escape_markdown(response,2), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("<< Volver", callback_data='main_menu')]]))
+            await query.edit_message_text(text=escape_markdown(response, 2), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("<< Volver", callback_data='main_menu')]]))
 
     async def show_transactions_for_review(self, query, financial_json):
         transactions = financial_json.get('transacciones', [])
